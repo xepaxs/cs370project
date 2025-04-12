@@ -67,11 +67,11 @@ def receive_messages(canvas):
 
 
             ##############################################################################
-
-            # Insert draw command here based on what the message contained
-            # Basically, the drawing app will interpret the message as instructions to draw on the canvas.
-            # Missing: handle_draw_command(canvas, message)
-
+            # Handle received commands based on their type
+            if message.get('type') == 'draw':
+                # Schedule the drawing on the main Tkinter thread
+                canvas.after_idle(draw_command, canvas, message)
+            # Add handling for other message types if needed (e.g., clear, user join/leave)
             ##############################################################################
 
         except socket.error as e:
@@ -143,23 +143,120 @@ def close_connection(status_label=None):
                # Update GUI with 'Disconnected' message.
                status_label.config(text="Disconnected", fg="red")
 
-# draw command
+# draw command (called when receiving data from server)
+def draw_command(canvas, command):
+    """Draws a line segment on the canvas based on a received command."""
+    try:
+        x1 = command['x1']
+        y1 = command['y1']
+        x2 = command['x2']
+        y2 = command['y2']
+        color = command['color']
+        width = command['width']
+        canvas.create_line(x1, y1, x2, y2, fill=color, width=width, capstyle=tk.ROUND, smooth=tk.TRUE)
+    except KeyError as e:
+        print(f"Received incomplete draw command: missing {e}")
+    except Exception as e:
+        print(f"Error executing draw command: {e}")
 
 # mouse event handlers
 last_x, last_y = None, None
 
-def mouse_down():
+# Need to pass event object
+def mouse_down(event):
+    global last_x, last_y
+    last_x, last_y = (event.x, event.y)
 
-def mouse_drag():
+# Need to pass event and canvas
+def mouse_drag(event, canvas):
+    global last_x, last_y, drawing_color, line_width
+    if last_x is not None and last_y is not None:
+        # Draw line segment locally
+        canvas.create_line(last_x, last_y, event.x, event.y,
+                          fill=drawing_color, width=line_width,
+                          capstyle=tk.ROUND, smooth=tk.TRUE)
+
+        # Prepare message to send
+        draw_message = {
+            'type': 'draw',
+            'x1': last_x,
+            'y1': last_y,
+            'x2': event.x,
+            'y2': event.y,
+            'color': drawing_color,
+            'width': line_width
+        }
+        send_message(draw_message)
+
+        # Update last position
+        last_x, last_y = event.x, event.y
+
+def on_mouse_up(event):
+    global last_x, last_y
+    last_x, last_y = None, None # Reset last position
     
     
 # color and width selection
-def set_color():
+def set_color(new_color):
+    global drawing_color
+    drawing_color = new_color
+    print(f"Color set to: {drawing_color}")
 
-def set_width():
+def set_width(new_width):
+    global line_width
+    line_width = new_width
+    print(f"Width set to: {line_width}")
 
 
 def main():
+    root = tk.Tk()
+    root.title("Collaborative Drawing Board")
+
+    # --- Control Frame ---
+    control_frame = tk.Frame(root)
+    control_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+    # Connection Status Label
+    status_label = tk.Label(control_frame, text="Disconnected", fg="red")
+    status_label.pack(side=tk.LEFT, padx=5)
+
+    # --- Drawing Canvas (define early for button command) ---
+    canvas = tk.Canvas(root, bg="white", width=800, height=600)
+    canvas.pack(fill=tk.BOTH, expand=True)
+
+    # Now create the connect button using the defined canvas
+    connect_button = tk.Button(control_frame, text="Connect", command=lambda: connect_to_server(canvas, status_label))
+    connect_button.pack(side=tk.LEFT, padx=5)
+
+    # Color Buttons
+    colors = ["black", "red", "green", "blue", "yellow", "orange", "purple", "white"]
+    for color in colors:
+        btn = tk.Button(control_frame, bg=color, width=2, command=lambda c=color: set_color(c))
+        btn.pack(side=tk.LEFT, padx=2)
+
+    # Width Scale
+    width_scale = tk.Scale(control_frame, from_=1, to=10, orient=tk.HORIZONTAL, label="Width",
+                           command=lambda w: set_width(int(w)))
+    width_scale.set(line_width) # Set initial value
+    width_scale.pack(side=tk.LEFT, padx=5)
+
+    clear_button = tk.Button(control_frame, text="Clear All", command=lambda: send_message({"action": "clear"}))
+    clear_button.pack(side=tk.LEFT, padx=5)
+
+
+    # Bind mouse events - use correct function names
+    canvas.bind("<Button-1>", mouse_down)
+    canvas.bind("<B1-Motion>", lambda event: mouse_drag(event, canvas)) # Needs lambda for canvas
+    canvas.bind("<ButtonRelease-1>", on_mouse_up)
+
+    # Handle window closing
+    def on_closing():
+        close_connection(status_label)
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    root.mainloop()
 
 if __name__ == "__main__":
     main() 
