@@ -65,14 +65,17 @@ def receive_messages(canvas):
             message_json = message_bytes.decode('utf-8')
             message = json.loads(message_json)
 
-
-            ##############################################################################
             # Handle received commands based on their type
+            msg_type = message.get('type')
             if message.get('type') == 'draw':
                 # Schedule the drawing on the main Tkinter thread
                 canvas.after_idle(draw_command, canvas, message)
-            # Add handling for other message types if needed (e.g., clear, user join/leave)
-            ##############################################################################
+            if message.get('type') == 'clear':
+                # Schedule the clearing on the main Tkinter thread
+                canvas.after_idle(clear_command, canvas)
+
+
+            # Add handling for other message types if needed (e.g., user join/leave, undo)
 
         except socket.error as e:
             # Generic socket error (bad packet, disconnect, etc.)
@@ -145,7 +148,7 @@ def close_connection(status_label=None):
 
 # draw command (called when receiving data from server)
 def draw_command(canvas, command):
-    """Draws a line segment on the canvas based on a received command."""
+    # Draws a line segment based on message received from server
     try:
         x1 = command['x1']
         y1 = command['y1']
@@ -159,18 +162,23 @@ def draw_command(canvas, command):
     except Exception as e:
         print(f"Error executing draw command: {e}")
 
+# Clear command
+def clear_command(canvas):
+    canvas.delete("all")
+
 # mouse event handlers
 last_x, last_y = None, None
 
-# Need to pass event object
+# Set coordinates on mouse press
 def mouse_down(event):
     global last_x, last_y
     last_x, last_y = (event.x, event.y)
 
-# Need to pass event and canvas
+# Draws line segment locally, then sends draw message to server
 def mouse_drag(event, canvas):
     global last_x, last_y, drawing_color, line_width
-    if last_x is not None and last_y is not None:
+
+    if last_x is not None and last_y is not None:   # If mouse still down
         # Draw line segment locally
         canvas.create_line(last_x, last_y, event.x, event.y,
                           fill=drawing_color, width=line_width,
@@ -179,29 +187,28 @@ def mouse_drag(event, canvas):
         # Prepare message to send
         draw_message = {
             'type': 'draw',
-            'x1': last_x,
-            'y1': last_y,
-            'x2': event.x,
-            'y2': event.y,
-            'color': drawing_color,
-            'width': line_width
+            'x1': last_x, 'y1': last_y,
+            'x2': event.x, 'y2': event.y,
+            'color': drawing_color, 'width': line_width
         }
         send_message(draw_message)
 
         # Update last position
         last_x, last_y = event.x, event.y
 
+# Reset coordinates on mouse unpress
 def on_mouse_up(event):
     global last_x, last_y
-    last_x, last_y = None, None # Reset last position
+    last_x, last_y = None, None
     
     
-# color and width selection
+# Color selection
 def set_color(new_color):
     global drawing_color
     drawing_color = new_color
     print(f"Color set to: {drawing_color}")
 
+# Width selection
 def set_width(new_width):
     global line_width
     line_width = new_width
@@ -240,7 +247,8 @@ def main():
     width_scale.set(line_width) # Set initial value
     width_scale.pack(side=tk.LEFT, padx=5)
 
-    clear_button = tk.Button(control_frame, text="Clear All", command=lambda: send_message({"action": "clear"}))
+    clear_button = tk.Button(control_frame, text="Clear All", command=lambda: (clear_command(canvas), send_message({"type": "clear"})))   
+
     clear_button.pack(side=tk.LEFT, padx=5)
 
 
