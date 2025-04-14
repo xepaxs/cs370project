@@ -2,6 +2,10 @@ import socket
 import threading
 import json # For sending structured data
 
+# Board history, used to mass dump onto new users on the board
+board_history = []
+history_lock = threading.Lock()
+
 HOST = '127.0.0.1' 
 PORT = 65432       
 clients = []
@@ -15,6 +19,12 @@ def broadcast(message, sender_conn):
     # 'message' contains the message that will be broadcasted.
     # 'sender_conn' the socket object of the sender, so they won't be sent their own actions.
 
+    # Append the draw command to the board history
+    if message.get("type") == "draw":
+        with history_lock:
+            board_history.append(message)
+
+    # Send the message out to every client
     with clients_lock:  
         for client_conn in clients:  # Loop through all active clients
             if client_conn != sender_conn:
@@ -47,6 +57,25 @@ def handle_client(conn, addr):
     with clients_lock:
         clients.append(conn)  # Add this client to the list of active clients
 
+    # Sending the new client the board history.
+    with history_lock:
+        for message in board_history:
+            try:
+                # Prepare message for sending by converting to JSON
+                # Then use utf-8 encoding to convert it to a byte stream
+                message_json = json.dumps(message)
+                message_bytes = message_json.encode('utf-8')
+
+                # Create a 4-byte prefix containing the message's length
+                length_prefix = len(message_bytes).to_bytes(4, 'big')
+
+                # Send the length-prefixed message to the client
+                conn.sendall(length_prefix + message_bytes)
+            except socket.error:
+                print(f"Failed to send history to {addr}")
+                break
+
+    # Now we listen for incoming messages from the new user.
     try:
         while True:
             
@@ -76,6 +105,7 @@ def handle_client(conn, addr):
 
             # Broadcast the message to all other clients.
             print(f"Received from {addr}: {message}")
+
             broadcast(message, conn)
 
     except socket.error as e:
