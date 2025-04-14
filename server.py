@@ -6,7 +6,7 @@ import json # For sending structured data
 board_history = []
 history_lock = threading.Lock()
 
-HOST = '127.0.0.1' 
+HOST = '0.0.0.0'  # Listen on all network interfaces
 PORT = 65432       
 clients = []
 
@@ -16,35 +16,39 @@ clients_lock = threading.Lock()
 
 def broadcast(message, sender_conn):
     # Broadcasts a message from a client to all other clients
-    # 'message' contains the message that will be broadcasted.
-    # 'sender_conn' the socket object of the sender, so they won't be sent their own actions.
+    # If sender_conn is None, send to all clients including sender
 
     # Append the draw command to the board history
     if message.get("type") == "draw":
         with history_lock:
             board_history.append(message)
+    elif message.get("type") == "clear":
+        with history_lock:
+            board_history.clear()
 
     # Send the message out to every client
+    disconnected_clients = []
     with clients_lock:  
-        for client_conn in clients:  # Loop through all active clients
-            if client_conn != sender_conn:
+        for client_conn in clients:
+            if sender_conn is None or client_conn != sender_conn:
                 try:
-                    # Prepare message for sending by converting to JSON
-                    # Then use utf-8 encoding to convert it to a byte stream
                     message_json = json.dumps(message)
                     message_bytes = message_json.encode('utf-8')
-
-                    # Create a 4-byte prefix containing the message's length
                     length_prefix = len(message_bytes).to_bytes(4, 'big')
-
-                    # Send the length-prefixed message to the client
                     client_conn.sendall(length_prefix + message_bytes)
+                except socket.error as e:
+                    print(f"Failed to send to client {client_conn.getpeername()}: {e}")
+                    disconnected_clients.append(client_conn)
 
-                except socket.error:
-                    # If an error occured, assume the client disconnected.
-                    clients.remove(client_conn)
-                    print(f"Client {client_conn.getpeername()} disconnected.")
-
+        # Remove disconnected clients
+        for client in disconnected_clients:
+            if client in clients:
+                clients.remove(client)
+                try:
+                    client.close()
+                except:
+                    pass
+                print(f"Removed disconnected client {client.getpeername()}")
 
 def handle_client(conn, addr):
     # Handles connection from a single client.
@@ -53,23 +57,24 @@ def handle_client(conn, addr):
     # 'conn' contains the client's socket information.
     # 'addr' contains something.
 
-    print(f"Connected by {addr}")
+    print(f"New client connected from {addr}")
     with clients_lock:
         clients.append(conn)  # Add this client to the list of active clients
+    
+    # Send welcome message to all clients
+    welcome_msg = {
+        "type": "system",
+        "message": f"New user joined from {addr[0]}"
+    }
+    broadcast(welcome_msg, None)  # None means send to all including sender
 
     # Sending the new client the board history.
     with history_lock:
         for message in board_history:
             try:
-                # Prepare message for sending by converting to JSON
-                # Then use utf-8 encoding to convert it to a byte stream
                 message_json = json.dumps(message)
                 message_bytes = message_json.encode('utf-8')
-
-                # Create a 4-byte prefix containing the message's length
                 length_prefix = len(message_bytes).to_bytes(4, 'big')
-
-                # Send the length-prefixed message to the client
                 conn.sendall(length_prefix + message_bytes)
             except socket.error:
                 print(f"Failed to send history to {addr}")
@@ -125,26 +130,43 @@ def handle_client(conn, addr):
 
 def start_server():
     # This function creates the server.
+    try:
+        # Create a new TCP socket (IPV4 addressing) using global HOST and PORT
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            # Configure the socket to allow address reuse and bind it global HOST and PORT.
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((HOST, PORT))
+            
+            # Start listening for incoming connections.
+            s.listen(5)  # Allow up to 5 pending connections
+            print(f"Server listening on {HOST}:{PORT}")
+            print("Ready for multiple clients to connect!")
 
-    # Create a new TCP socket (IPV4 addressing) using global HOST and PORT
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        
-        # Configure the socket to allow address reuse and bind it global HOST and PORT.
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind((HOST, PORT))
-        
-        # Start listening for incoming connections.
-        s.listen()
-        print(f"Server listening on {HOST}:{PORT}")
+            while True:
+                try:
+                    # Accept incoming clients in the current address.
+                    conn, addr = s.accept()
+                    print(f"Accepted connection from {addr}")
 
-        while True:
-            # Accept incoming clients in the current address.
-            conn, addr = s.accept()
-
-            # Start a new daemon thread for each client
-            thread = threading.Thread(target=handle_client, args=(conn, addr))
-            thread.daemon = True
-            thread.start()
+                    # Start a new daemon thread for each client
+                    thread = threading.Thread(target=handle_client, args=(conn, addr))
+                    thread.daemon = True
+                    thread.start()
+                except Exception as e:
+                    print(f"Error accepting client connection: {e}")
+                    continue
+    except Exception as e:
+        print(f"Server error: {e}")
+        print("Server shutting down...")
+    finally:
+        # Clean up all client connections
+        with clients_lock:
+            for client in clients:
+                try:
+                    client.close()
+                except:
+                    pass
+            clients.clear()
 
 if __name__ == "__main__":
     start_server() 
