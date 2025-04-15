@@ -22,9 +22,13 @@ def send_message(message):
     global sock 
     if sock:  # Perform if connection exists
         try:
-            message_json = json.dumps(message)
+            # Convert message to json
+            message_json = json.dumps(message)  
+            # Encode message to bytes
             message_bytes = message_json.encode('utf-8')
+            # Prefix message with its length
             length_prefix = len(message_bytes).to_bytes(4, 'big')
+            # Send message to server
             sock.sendall(length_prefix + message_bytes)
         except socket.error as e:
             print(f"Error sending message: {e}")
@@ -36,19 +40,25 @@ def receive_messages(canvas, status_label):
     global sock
     while sock:   # Run while connection is not closed
         try:
+            # Receive message length prefix
             length_prefix = sock.recv(4)
             if not length_prefix:
                 print("Server disconnected.")
                 break
-
+            
+            # Convert length prefix to integer
             message_length = int.from_bytes(length_prefix, 'big')
+            
+            # Receive message
             message_bytes = b''
             while len(message_bytes) < message_length:
+                # Receive chunk of message
                 chunk = sock.recv(message_length - len(message_bytes))
                 if not chunk:
                     raise socket.error("Server disconnected during message receive")
                 message_bytes += chunk
 
+            # Decode message
             message_json = message_bytes.decode('utf-8')
             message = json.loads(message_json)
 
@@ -76,23 +86,29 @@ def receive_messages(canvas, status_label):
     print("Receive thread exiting.")
     canvas.after_idle(lambda: close_connection(status_label))
 
-### Connection functions ###
+# Connection functions 
 
 def connect_to_server(canvas, status_label):
     global sock, HOST
     if sock is None:
         try:
+            # Create socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Connect to server
             sock.connect((HOST, PORT))
 
+            # Update status label
             status_label.config(text=f"Connected to {HOST}:{PORT}", fg="green")
             print(f"Successfully connected to {HOST}:{PORT}")
 
+            # Start receive thread 
             receive_thread = threading.Thread(target=receive_messages, args=(canvas, status_label), daemon=True)
             receive_thread.start()
 
         except socket.error as e:
+            # Close socket
             sock = None
+            # Update status label
             error_msg = f"Failed to connect: {e}"
             status_label.config(text=error_msg, fg="red")
             print(error_msg)
@@ -104,10 +120,12 @@ def close_connection(status_label=None):
     global sock
     if sock:
         try:
+            # Shutdown socket
             sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
         finally:
+            # Close socket
             sock.close()
             sock = None
             print("Connection closed.")
